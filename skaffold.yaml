@@ -1,0 +1,29 @@
+apiVersion: skaffold/v2beta16
+kind: Config
+metadata:
+  name: tracing-app
+
+build:
+  local:
+    push: false
+    useBuildkit: true
+  artifacts:
+  - image: vjkancherla/tracing-app
+    docker:
+      dockerfile: Dockerfile
+
+deploy:
+  helm:
+    releases:
+    - name: tracing-app
+      chartPath: tracing-app-helm-chart
+      namespace: my-demo
+      createNamespace: true
+
+portForward:
+- resourceType: service
+  resourceName: tracing-webapp-service
+  namespace: my-demo
+  port: 8080
+  localPort: 8080
+

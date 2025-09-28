@@ -1,0 +1,244 @@
+adminPassword: admin
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 100m
+    memory: 128Mi
+
+persistence:
+  enabled: false
+
+datasources:
+  datasources.yaml:
+    apiVersion: 1
+    datasources:
+    - name: Prometheus
+      type: prometheus
+      url: http://dev-prometheus-kube-promet-prometheus.observability.svc.cluster.local:9090
+      isDefault: true
+      jsonData:
+        exemplarTraceIdDestinations:
+          - name: trace_id
+            datasourceUid: tempo
+    
+    - name: Tempo
+      type: tempo
+      uid: tempo
+      url: http://dev-tempo.observability.svc.cluster.local:3100
+      jsonData:
+        tracesToLogsV2:
+          datasourceUid: loki
+          spanStartTimeShift: '-1h'
+          spanEndTimeShift: '1h'
+          filterByTraceID: true
+          filterBySpanID: false
+          customQuery: false
+          tags:
+            - key: 'service.name'
+              value: 'service_name'
+        tracesToMetrics:
+          datasourceUid: prometheus
+          spanStartTimeShift: '-1h'
+          spanEndTimeShift: '1h'
+        serviceMap:
+          datasourceUid: prometheus
+        nodeGraph:
+          enabled: true
+    
+    - name: Loki
+      type: loki
+      uid: loki
+      url: http://dev-loki.observability.svc.cluster.local:3100
+      jsonData:
+        maxLines: 1000
+        derivedFields:
+          - datasourceUid: tempo
+            matcherRegex: "trace_id=(\\w+)"
+            name: TraceID
+            url: '$${__value.raw}'
+
+dashboardProviders:
+  dashboardproviders.yaml:
+    apiVersion: 1
+    providers:
+    - name: 'default'
+      orgId: 1
+      folder: ''
+      type: file
+      disableDeletion: false
+      editable: true
+      options:
+        path: /var/lib/grafana/dashboards/default
+
+dashboards:
+  default:
+    traces-dashboard:
+      json: |
+        {
+          "annotations": {
+            "list": []
+          },
+          "editable": true,
+          "fiscalYearStartMonth": 0,
+          "graphTooltip": 0,
+          "id": 1,
+          "links": [],
+          "panels": [
+            {
+              "datasource": {
+                "type": "tempo",
+                "uid": "tempo"
+              },
+              "fieldConfig": {
+                "defaults": {},
+                "overrides": []
+              },
+              "gridPos": {
+                "h": 20,
+                "w": 24,
+                "x": 0,
+                "y": 0
+              },
+              "id": 1,
+              "targets": [
+                {
+                  "datasource": {
+                    "type": "tempo",
+                    "uid": "tempo"
+                  },
+                  "queryType": "traceql",
+                  "refId": "A",
+                  "query": "{}"
+                }
+              ],
+              "title": "Traces",
+              "type": "traces"
+            }
+          ],
+          "refresh": "30s",
+          "schemaVersion": 41,
+          "tags": [],
+          "templating": {
+            "list": [
+              {
+                "current": {
+                  "text": "",
+                  "value": ""
+                },
+                "name": "trace_id",
+                "type": "textbox",
+                "label": "Trace ID"
+              }
+            ]
+          },
+          "time": {
+            "from": "now-1h",
+            "to": "now"
+          },
+          "timepicker": {},
+          "timezone": "browser",
+          "title": "Traces",
+          "uid": "traces-dashboard",
+          "version": 1
+        }
+    
+    logs-dashboard:
+      json: |
+        {
+          "annotations": {
+            "list": []
+          },
+          "editable": true,
+          "fiscalYearStartMonth": 0,
+          "graphTooltip": 0,
+          "id": 2,
+          "links": [],
+          "panels": [
+            {
+              "datasource": {
+                "type": "loki",
+                "uid": "loki"
+              },
+              "fieldConfig": {
+                "defaults": {},
+                "overrides": []
+              },
+              "gridPos": {
+                "h": 20,
+                "w": 24,
+                "x": 0,
+                "y": 0
+              },
+              "id": 1,
+              "options": {
+                "dedupStrategy": "none",
+                "enableInfiniteScrolling": false,
+                "enableLogDetails": true,
+                "prettifyLogMessage": false,
+                "showCommonLabels": false,
+                "showLabels": true,
+                "showTime": true,
+                "sortOrder": "Descending",
+                "wrapLogMessage": true
+              },
+              "pluginVersion": "12.0.0",
+              "targets": [
+                {
+                  "expr": "{service_name=~\"$service\"} |= \"$trace_id\"",
+                  "refId": "A"
+                }
+              ],
+              "title": "Logs",
+              "type": "logs"
+            }
+          ],
+          "refresh": "30s",
+          "schemaVersion": 41,
+          "tags": [],
+          "templating": {
+            "list": [
+              {
+                "current": {
+                  "text": ".*",
+                  "value": ".*"
+                },
+                "name": "trace_id",
+                "type": "textbox",
+                "label": "Trace ID",
+                "options": [
+                  {
+                    "text": ".*",
+                    "value": ".*"
+                  }
+                ]
+              },
+              {
+                "current": {
+                  "text": ".*",
+                  "value": ".*"
+                },
+                "name": "service",
+                "type": "textbox",
+                "label": "Service",
+                "options": [
+                  {
+                    "text": ".*",
+                    "value": ".*"
+                  }
+                ]
+              }
+            ]
+          },
+          "time": {
+            "from": "now-1h",
+            "to": "now"
+          },
+          "timepicker": {},
+          "timezone": "browser",
+          "title": "Logs",
+          "uid": "logs-dashboard",
+          "version": 1
+        }

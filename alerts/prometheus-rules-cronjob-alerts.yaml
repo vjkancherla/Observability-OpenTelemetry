@@ -1,0 +1,41 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: cronjob-otel-alerts
+  namespace: observability
+  labels:
+    prometheus: kube-prometheus
+    role: alert-rules
+    release: dev-prometheus
+spec:
+  groups:
+  - name: cronjob-otel-traces
+    interval: 30s
+    rules:
+    # Alert when CronJob fails (from span metrics)
+    - alert: CronJobFailedWithTraceID
+      expr: |
+        calls_total{service_name="request-sender", span_kind="SPAN_KIND_CLIENT", http_status_code="500"} > 0
+      for: 0m
+      labels:
+        severity: warning
+        service: request-sender
+        component: cronjob
+      annotations:
+        summary: "CronJob failed - Trace ID: {{ $labels.trace_id }}"
+        description: "CronJob request failed with HTTP 500. Service: {{ $labels.service_name }}, Status: {{ $labels.http_status_code }}"
+        trace_url: "http://localhost:3000/explore?left=%5B%22now-1h%22,%22now%22,%22tempo%22,%7B%22query%22:%22{{ $labels.trace_id }}%22%7D%5D"
+        logs_url: "http://localhost:3000/explore?left=%5B%22now-1h%22,%22now%22,%22loki%22,%7B%22expr%22:%22%7Bservice_name%3D%5C%22request-sender%5C%22%7D%20%7C%3D%20%5C%22{{ $labels.trace_id }}%5C%22%22%7D%5D"
+    
+    # Alert when CronJob hasn't run recently
+    - alert: CronJobNotRunningRecently
+      expr: |
+        (time() - max(calls_total{service_name="request-sender"}) > 300) or absent(calls_total{service_name="request-sender"})
+      for: 2m
+      labels:
+        severity: critical
+        service: request-sender
+        component: cronjob
+      annotations:
+        summary: "CronJob hasn't run in over 5 minutes"
+        description: "The request-sender CronJob should run every minute but hasn't been seen recently."

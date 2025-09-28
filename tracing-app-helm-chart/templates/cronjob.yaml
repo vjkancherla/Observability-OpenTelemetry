@@ -1,0 +1,167 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ .Values.cronjob.name }}
+  labels:
+    app: {{ .Values.cronjob.name }}
+spec:
+  schedule: {{ .Values.cronjob.schedule | quote }}
+  successfulJobsHistoryLimit: 2
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      template:
+        metadata:
+          labels:
+            app: {{ .Values.cronjob.name }}
+        spec:
+          containers:
+          - name: request-sender
+            image: "{{ .Values.cronjob.image.repository }}:{{ .Values.cronjob.image.tag }}"
+            env:
+            - name: OTEL_COLLECTOR_ENDPOINT
+              value: {{ .Values.otel.collector.httpEndpoint | quote }}
+            - name: OTEL_SERVICE_NAME
+              value: {{ .Values.cronjob.name | quote }}
+            - name: TARGET_SERVICE
+              value: "{{ .Values.webapp.name }}-service"
+            command:
+            - /bin/sh
+            - -c
+            - |
+              # Generate W3C Trace Context
+              TRACE_ID=$(cat /dev/urandom | tr -dc 'a-f0-9' | fold -w 32 | head -n 1)
+              SPAN_ID=$(cat /dev/urandom | tr -dc 'a-f0-9' | fold -w 16 | head -n 1)
+              TRACEPARENT="00-${TRACE_ID}-${SPAN_ID}-01"
+              
+              echo "=========================================="
+              echo "CronJob Execution Started"
+              echo "=========================================="
+              echo "Service: ${OTEL_SERVICE_NAME}"
+              echo "Trace ID: ${TRACE_ID}"
+              echo "Span ID: ${SPAN_ID}"
+              echo ""
+              
+              # Record start time (nanoseconds)
+              START_TIME_NS=$(date +%s%N)
+              
+              # Every 5th minute = error endpoint, otherwise success endpoint
+              CURRENT_MINUTE=$(date +%M | sed 's/^0//')
+              if [ $((CURRENT_MINUTE % 5)) -eq 0 ]; then
+                ENDPOINT="/simulate-error"
+                EXPECTED_CODE="500"
+                JOB_TYPE="error_simulation"
+                echo "ERROR SIMULATION (minute $CURRENT_MINUTE)"
+              else
+                ENDPOINT="/"
+                EXPECTED_CODE="200"
+                JOB_TYPE="success"
+                echo "SUCCESS TEST (minute $CURRENT_MINUTE)"
+              fi
+              
+              echo "Endpoint: ${ENDPOINT}"
+              echo "Expected: ${EXPECTED_CODE}"
+              echo ""
+              
+              # Make HTTP request
+              echo "Making request..."
+              RESPONSE_CODE=$(curl -H "traceparent: ${TRACEPARENT}" \
+                   -s -o /tmp/response.json -w "%{http_code}" \
+                   "http://${TARGET_SERVICE}:8080${ENDPOINT}" || echo "000")
+              
+              # Record end time
+              END_TIME_NS=$(date +%s%N)
+              
+              echo "Response: ${RESPONSE_CODE}"
+              echo ""
+              
+              # Determine span status
+              if [ "$RESPONSE_CODE" = "$EXPECTED_CODE" ]; then
+                if [ "$JOB_TYPE" = "error_simulation" ]; then
+                  SPAN_STATUS_CODE=2  # ERROR
+                  SPAN_STATUS_MESSAGE="Expected error simulation completed"
+                  JOB_STATUS="failed"
+                  echo "Expected failure occurred"
+                else
+                  SPAN_STATUS_CODE=1  # OK
+                  SPAN_STATUS_MESSAGE="Success"
+                  JOB_STATUS="success"
+                  echo "Request succeeded"
+                fi
+              else
+                SPAN_STATUS_CODE=2  # ERROR
+                SPAN_STATUS_MESSAGE="Unexpected response code: ${RESPONSE_CODE}"
+                JOB_STATUS="failed"
+                echo "Unexpected response!"
+              fi
+              
+              # Create OTLP span payload - this should be the PARENT span
+              cat > /tmp/span.json <<EOF
+              {
+                "resourceSpans": [{
+                  "resource": {
+                    "attributes": [
+                      {"key": "service.name", "value": {"stringValue": "${OTEL_SERVICE_NAME}"}},
+                      {"key": "service.version", "value": {"stringValue": "1.0.0"}}
+                    ]
+                  },
+                  "scopeSpans": [{
+                    "scope": {
+                      "name": "cronjob-manual-instrumentation"
+                    },
+                    "spans": [{
+                      "traceId": "${TRACE_ID}",
+                      "spanId": "${SPAN_ID}",
+                      "name": "http_request",
+                      "kind": 3,
+                      "startTimeUnixNano": "${START_TIME_NS}",
+                      "endTimeUnixNano": "${END_TIME_NS}",
+                      "attributes": [
+                        {"key": "http.method", "value": {"stringValue": "GET"}},
+                        {"key": "http.url", "value": {"stringValue": "http://${TARGET_SERVICE}:8080${ENDPOINT}"}},
+                        {"key": "http.status_code", "value": {"intValue": ${RESPONSE_CODE}}},
+                        {"key": "job.type", "value": {"stringValue": "${JOB_TYPE}"}},
+                        {"key": "job.status", "value": {"stringValue": "${JOB_STATUS}"}},
+                        {"key": "job.expected_code", "value": {"intValue": ${EXPECTED_CODE}}},
+                        {"key": "component", "value": {"stringValue": "cronjob"}}
+                      ],
+                      "status": {
+                        "code": ${SPAN_STATUS_CODE},
+                        "message": "${SPAN_STATUS_MESSAGE}"
+                      }
+                    }]
+                  }]
+                }]
+              }
+              EOF
+              
+              # Send span to OTel Collector
+              echo "Sending span to OTel Collector..."
+              HTTP_STATUS=$(curl -X POST \
+                -H "Content-Type: application/json" \
+                -d @/tmp/span.json \
+                "${OTEL_COLLECTOR_ENDPOINT}/v1/traces" \
+                -s -o /dev/null -w "%{http_code}")
+              
+              if [ "$HTTP_STATUS" = "200" ] || [ "$HTTP_STATUS" = "202" ]; then
+                echo "Span sent successfully (HTTP ${HTTP_STATUS})"
+              else
+                echo "Failed to send span (HTTP ${HTTP_STATUS})"
+              fi
+              
+              echo ""
+              echo "=========================================="
+              echo "Summary"
+              echo "=========================================="
+              echo "Job Type: ${JOB_TYPE}"
+              echo "Job Status: ${JOB_STATUS}"
+              echo "Trace ID: ${TRACE_ID}"
+              echo "Grafana: http://localhost:3000/explore?trace_id=${TRACE_ID}"
+              echo "=========================================="
+              
+              # Exit with error for failed jobs
+              if [ "$JOB_STATUS" = "failed" ]; then
+                exit 1
+              fi
+          restartPolicy: Never

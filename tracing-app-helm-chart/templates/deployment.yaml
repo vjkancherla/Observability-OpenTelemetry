@@ -1,0 +1,55 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Values.webapp.name }}
+  labels:
+    app: {{ .Values.webapp.name }}
+spec:
+  replicas: {{ .Values.webapp.replicas }}
+  selector:
+    matchLabels:
+      app: {{ .Values.webapp.name }}
+  template:
+    metadata:
+      labels:
+        app: {{ .Values.webapp.name }}
+    spec:
+      containers:
+      - name: {{ .Values.webapp.name }}
+        image: "{{ .Values.webapp.image.repository }}:{{ .Values.webapp.image.tag }}"
+        ports:
+        - containerPort: 8080
+        
+        env:
+        - name: JAVA_TOOL_OPTIONS
+          value: "-javaagent:/app/otel/opentelemetry-javaagent.jar"
+        - name: OTEL_SERVICE_NAME
+          value: {{ .Values.webapp.name | quote }}
+        - name: OTEL_EXPORTER_OTLP_ENDPOINT
+          value: {{ .Values.otel.collector.grpcEndpoint | quote }}
+        - name: OTEL_EXPORTER_OTLP_PROTOCOL
+          value: {{ .Values.otel.exporter.protocol | default "http/protobuf" | quote }}
+        - name: OTEL_TRACES_EXPORTER
+          value: {{ .Values.otel.exporter.tracesExporter | quote }}
+        - name: OTEL_METRICS_EXPORTER
+          value: {{ .Values.otel.exporter.metricsExporter | quote }}
+        - name: OTEL_LOGS_EXPORTER
+          value: {{ .Values.otel.exporter.logsExporter | quote }}
+        
+        resources:
+          {{- toYaml .Values.webapp.resources | nindent 10 }}
+        
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: {{ .Values.webapp.livenessProbe.initialDelaySeconds | default 30 }}
+          periodSeconds: {{ .Values.webapp.livenessProbe.periodSeconds | default 10 }}
+        
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: {{ .Values.webapp.readinessProbe.initialDelaySeconds | default 10 }}
+          periodSeconds: {{ .Values.webapp.readinessProbe.periodSeconds | default 5 }}

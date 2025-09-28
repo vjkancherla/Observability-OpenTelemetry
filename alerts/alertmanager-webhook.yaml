@@ -1,0 +1,20 @@
+apiVersion: monitoring.coreos.com/v1alpha1
+kind: AlertmanagerConfig
+metadata:
+  name: otel-trace-correlation
+  namespace: observability
+  labels:
+    alertmanagerConfig: main
+spec:
+  route:
+    groupBy: ['alertname', 'trace_id']
+    groupWait: 5s
+    groupInterval: 30s
+    repeatInterval: 2m
+    receiver: 'otel-correlation-webhook'
+
+  receivers:
+  - name: 'otel-correlation-webhook'
+    webhookConfigs:
+    - url: 'https://webhook-test.com/b05fc179dd8b97132b436df4cb3dfdd1'
+      sendResolved: true

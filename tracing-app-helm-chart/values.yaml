@@ -1,0 +1,47 @@
+# OpenTelemetry Configuration (shared)
+otel:
+  collector:
+    # HTTP endpoint (for Java agent - use HTTP protocol on port 4318)
+    grpcEndpoint: "http://otel-collector-opentelemetry-collector.observability.svc.cluster.local:4318"
+    # HTTP endpoint (for CronJob manual instrumentation)
+    httpEndpoint: "http://otel-collector-opentelemetry-collector.observability.svc.cluster.local:4318"
+  
+  exporter:
+    # Default: send to OTel Collector
+    tracesExporter: "otlp"
+    metricsExporter: "otlp"
+    logsExporter: "otlp"
+    # Explicitly set protocol to HTTP
+    protocol: "http/protobuf"
+
+# Spring Boot Webapp
+webapp:
+  name: tracing-webapp
+  replicas: 1
+  image:
+    repository: vjkancherla/tracing-app  # Keep using your image
+    tag: "1.0.0"
+  
+  # Add health probe configuration
+  livenessProbe:
+    initialDelaySeconds: 60
+    periodSeconds: 10
+  readinessProbe:
+    initialDelaySeconds: 30
+    periodSeconds: 5
+  
+  resources:
+    limits:
+      cpu: 500m
+      memory: 512Mi
+    requests:
+      cpu: 200m
+      memory: 256Mi
+
+# CronJob
+cronjob:
+  name: request-sender
+  schedule: "*/1 * * * *"
+  image:
+    repository: curlimages/curl
+    tag: latest

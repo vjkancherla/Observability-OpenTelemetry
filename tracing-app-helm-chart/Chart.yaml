@@ -1,0 +1,17 @@
+apiVersion: v2
+name: otel-tracing-app
+description: A Helm chart for Spring Boot application with OpenTelemetry tracing
+type: application
+version: 0.1.0
+appVersion: "1.0.0"
+keywords:
+  - tracing
+  - opentelemetry
+  - spring-boot
+  - observability
+  - grafana
+  - tempo
+home: https://github.com/your-org/otel-tracing-app
+maintainers:
+  - name: Your Name
+    email: your.email@example.com

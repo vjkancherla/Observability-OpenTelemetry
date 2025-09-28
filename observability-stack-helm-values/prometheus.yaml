@@ -1,0 +1,56 @@
+grafana:
+  enabled: false
+
+prometheus:
+  prometheusSpec:
+    retention: 2h
+    
+    # Enable exemplar storage for trace linking
+    enableFeatures:
+      - exemplar-storage
+    
+    resources:
+      requests:
+        cpu: 50m
+        memory: 128Mi
+      limits:
+        cpu: 200m
+        memory: 256Mi
+    
+    storageSpec:
+      volumeClaimTemplate:
+        spec:
+          storageClassName: local-path
+          resources:
+            requests:
+              storage: 200Mi
+    
+    # Scrape OTel Collector metrics
+    additionalScrapeConfigs:
+      - job_name: 'otel-collector'
+        static_configs:
+          - targets: ['otel-collector.observability.svc.cluster.local:8889']
+
+alertmanager:
+  enabled: true
+  alertmanagerSpec:
+    resources:
+      requests:
+        cpu: 25m
+        memory: 32Mi
+      limits:
+        cpu: 50m
+        memory: 64Mi
+    storage:
+      volumeClaimTemplate:
+        spec:
+          storageClassName: local-path
+          resources:
+            requests:
+              storage: 200Mi
+
+nodeExporter:
+  enabled: false
+
+kubeStateMetrics:
+  enabled: true

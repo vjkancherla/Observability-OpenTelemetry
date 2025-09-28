@@ -1,0 +1,5 @@
+**/target/
+**/bin/
+**/.git/
+**/node_modules/
+**/test-logs/
