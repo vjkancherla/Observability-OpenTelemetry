@@ -1,8 +1,8 @@
 mode: deployment
 
 image:
-  repository: otel/opentelemetry-collector-contrib
-  tag: 0.111.2
+  repository: otel/opentelemetry-collector-k8s
+  tag: 0.115.1
 
 resources:
   requests:

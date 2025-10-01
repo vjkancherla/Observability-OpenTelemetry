@@ -1,14 +1,15 @@
 tempo:
   repository: grafana/tempo
-  tag: 1.18.2
+  tag: 2.7.1
   
+   Minimal resources for low-memory environments
   resources:
     requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
       cpu: 100m
       memory: 256Mi
-    limits:
-      cpu: 200m
-      memory: 512Mi
   
   storage:
     trace:
@@ -17,6 +18,12 @@ tempo:
         path: /var/tempo/traces
       wal:
         path: /var/tempo/wal
+      # Reduce block size and cache
+      block:
+        encoding: zstd
+      pool:
+        max_workers: 10
+        queue_depth: 2000
   
   receivers:
     otlp:
@@ -26,13 +33,18 @@ tempo:
         http:
           endpoint: 0.0.0.0:4318
   
-  metricsGenerator:
-    enabled: true
-    remoteWriteUrl: http://dev-prometheus-kube-promet-prometheus.observability.svc.cluster.local:9090/api/v1/write
+  # Reduce memory usage
+  querier:
+    max_concurrent_queries: 5
+  
+  # Minimal ingester settings
+  ingester:
+    max_block_duration: 5m
+    max_block_bytes: 10485760  # 10MB
 
 persistence:
   enabled: true
-  size: 1Gi
+  size: 200Mi  # Reduced from 1Gi
   accessModes:
     - ReadWriteOnce
 

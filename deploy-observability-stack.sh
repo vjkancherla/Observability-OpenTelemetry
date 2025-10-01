@@ -62,24 +62,6 @@ kubectl apply -f alerts/prometheus-rules-cronjob-alerts.yaml
 kubectl apply -f alerts/alertmanager-webhook.yaml
 echo "   Custom rules and Alertmanager config applied"
 
-echo "Building Spring Boot application..."
-mvn clean package -DskipTests
-echo "   Application built"
-
-echo "Building Docker image..."
-docker build -t tracing-app:1.0.0 .
-echo "   Docker image built"
-
-echo "Loading Docker image into k3d..."
-k3d image import tracing-app:1.0.0 -c mycluster
-echo "   Image loaded into cluster"
-
-echo "Deploying Tracing App..."
-helm upgrade --install dev-tracing ./helm-chart \
-  --namespace my-demo --wait --timeout=5m
-wait_for_release dev-tracing my-demo
-echo "   Tracing app deployed"
-
 echo "Starting port-forwards..."
 kubectl port-forward -n observability svc/dev-grafana 3000:80 >/dev/null 2>&1 &
 kubectl port-forward -n observability svc/dev-prometheus-kube-promet-prometheus 9090:9090 >/dev/null 2>&1 &

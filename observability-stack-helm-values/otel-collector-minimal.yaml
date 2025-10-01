@@ -45,7 +45,13 @@ config:
       limit_percentage: 80
   
   exporters:
-    # For Step 1: Just log everything to console
+    # Export traces to Tempo
+    otlp/tempo:
+      endpoint: dev-tempo.observability.svc.cluster.local:4317
+      tls:
+        insecure: true
+    
+    # Keep debug exporter for troubleshooting
     debug:
       verbosity: detailed
   
@@ -56,13 +62,13 @@ config:
   service:
     extensions: [health_check]
     pipelines:
-      # Simple traces pipeline - just log for now
+      # Traces pipeline - export to both Tempo and debug
       traces:
         receivers: [otlp]
         processors: [memory_limiter, batch]
-        exporters: [debug]
+        exporters: [otlp/tempo, debug]
       
-      # Simple logs pipeline - just log for now  
+      # Logs pipeline - still just debug for now  
       logs:
         receivers: [otlp]
         processors: [memory_limiter, batch]
