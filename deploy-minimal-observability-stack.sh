@@ -12,9 +12,9 @@ echo ""
 echo "Step 1: Base Infrastructure"
 echo "============================"
 
-# echo "Creating k3d cluster..."
-# k3d cluster create mycluster --agents 1 --wait
-# echo "   ✅ Cluster ready"
+echo "Creating k3d cluster..."
+k3d cluster create mycluster --agents 1 --wait
+echo "   ✅ Cluster ready"
 
 echo "Adding helm repositories..."
 helm repo add open-telemetry https://open-telemetry.github.io/opentelemetry-helm-charts >/dev/null
@@ -45,16 +45,24 @@ helm upgrade --install otel-collector open-telemetry/opentelemetry-collector \
   --wait --timeout=5m
 echo "   ✅ OTel Collector deployed"
 
+echo "Deploying Grafana (with Tempo datasource)..."
+helm upgrade --install dev-grafana grafana/grafana \
+  --version 9.0.0 --namespace observability \
+  -f observability-stack-helm-values/grafana-minimal.yaml \
+  --wait --timeout=5m
+echo "   ✅ Grafana deployed"
+
 echo ""
-echo "Step 4: Port Forwarding"
+echo "Step 3: Port Forwarding"
 echo "======================="
 
 echo "Starting port-forwards..."
 pkill -f "kubectl port-forward" 2>/dev/null || true
 
 kubectl port-forward -n observability svc/dev-tempo 3100:3100 >/dev/null 2>&1 &
+kubectl port-forward -n observability svc/dev-grafana 3000:80 >/dev/null 2>&1 &
 
-sleep 2
+sleep 3
 echo "   ✅ Port-forwards started"
 
 echo ""
@@ -64,14 +72,16 @@ echo "====================================="
 echo ""
 echo "Services available:"
 echo "  - Tempo API: http://localhost:3100"
+echo "  - Grafana: http://localhost:3000 (admin/admin)"
 echo ""
-echo "Verify deployment:"
+echo "Next steps:"
+echo "  1. Deploy your apps: skaffold run"
+echo "  2. Wait for CronJob to run (every minute)"
+echo "  3. Open Grafana and explore traces"
+echo ""
+echo "Verification:"
 echo "  kubectl get pods -n observability"
+echo "  ./scripts/verify-otel-to-tempo.sh"
 echo ""
-echo "Test trace collection:"
-echo "  1. Wait for CronJob to run (every minute)"
-echo "  2. Get trace_id from CronJob logs"
-echo "  3. Query: curl http://localhost:3100/api/traces/{trace_id}"
-echo ""
-echo "Stop everything: ./cleanup.sh"
+echo "Stop everything: ./clean.sh"
 echo "====================================="

@@ -35,6 +35,16 @@ otel/*.jar
 
 ```
 
+# .skaffoldignore
+
+```
+**/target/
+**/bin/
+**/.git/
+**/node_modules/
+**/test-logs/
+```
+
 # alerts/alertmanager-webhook.yaml
 
 ```yaml
@@ -119,7 +129,89 @@ k3d cluster delete mycluster 2>/dev/null || true
 echo "✅ Done!"
 ```
 
-# deploy.sh
+# deploy-minimal-observability-stack.sh
+
+```sh
+#!/bin/bash
+set -e
+
+echo "Combined Deployment: Step 1 + Step 2"
+echo "====================================="
+echo "This will deploy:"
+echo "  - k3d cluster"
+echo "  - OpenTelemetry Collector"
+echo "  - Tempo (trace storage)"
+echo ""
+
+echo "Step 1: Base Infrastructure"
+echo "============================"
+
+echo "Creating k3d cluster..."
+k3d cluster create mycluster --agents 1 --wait
+echo "   ✅ Cluster ready"
+
+echo "Adding helm repositories..."
+helm repo add open-telemetry https://open-telemetry.github.io/opentelemetry-helm-charts >/dev/null
+helm repo add grafana https://grafana.github.io/helm-charts >/dev/null
+helm repo update >/dev/null
+echo "   ✅ Repositories updated"
+
+echo "Creating namespaces..."
+kubectl create namespace observability 2>/dev/null || true
+kubectl create namespace my-demo 2>/dev/null || true
+echo "   ✅ Namespaces created"
+
+echo ""
+echo "Step 2: Deploy Observability Stack"
+echo "==================================="
+
+echo "Deploying Tempo..."
+helm upgrade --install dev-tempo grafana/tempo \
+  --version 1.18.2 --namespace observability \
+  -f observability-stack-helm-values/tempo.yaml \
+  --wait --timeout=5m
+echo "   ✅ Tempo deployed"
+
+echo "Deploying OpenTelemetry Collector (with Tempo export)..."
+helm upgrade --install otel-collector open-telemetry/opentelemetry-collector \
+  --version 0.111.2 --namespace observability \
+  -f observability-stack-helm-values/otel-collector-minimal.yaml \
+  --wait --timeout=5m
+echo "   ✅ OTel Collector deployed"
+
+echo ""
+echo "Step 4: Port Forwarding"
+echo "======================="
+
+echo "Starting port-forwards..."
+pkill -f "kubectl port-forward" 2>/dev/null || true
+
+kubectl port-forward -n observability svc/dev-tempo 3100:3100 >/dev/null 2>&1 &
+
+sleep 2
+echo "   ✅ Port-forwards started"
+
+echo ""
+echo "====================================="
+echo "Deployment Complete!"
+echo "====================================="
+echo ""
+echo "Services available:"
+echo "  - Tempo API: http://localhost:3100"
+echo ""
+echo "Verify deployment:"
+echo "  kubectl get pods -n observability"
+echo ""
+echo "Test trace collection:"
+echo "  1. Wait for CronJob to run (every minute)"
+echo "  2. Get trace_id from CronJob logs"
+echo "  3. Query: curl http://localhost:3100/api/traces/{trace_id}"
+echo ""
+echo "Stop everything: ./cleanup.sh"
+echo "====================================="
+```
+
+# deploy-observability-stack.sh
 
 ```sh
 #!/bin/bash
@@ -185,24 +277,6 @@ echo "Applying custom PrometheusRules and AlertmanagerConfig..."
 kubectl apply -f alerts/prometheus-rules-cronjob-alerts.yaml
 kubectl apply -f alerts/alertmanager-webhook.yaml
 echo "   Custom rules and Alertmanager config applied"
-
-echo "Building Spring Boot application..."
-mvn clean package -DskipTests
-echo "   Application built"
-
-echo "Building Docker image..."
-docker build -t tracing-app:1.0.0 .
-echo "   Docker image built"
-
-echo "Loading Docker image into k3d..."
-k3d image import tracing-app:1.0.0 -c mycluster
-echo "   Image loaded into cluster"
-
-echo "Deploying Tracing App..."
-helm upgrade --install dev-tracing ./helm-chart \
-  --namespace my-demo --wait --timeout=5m
-wait_for_release dev-tracing my-demo
-echo "   Tracing app deployed"
 
 echo "Starting port-forwards..."
 kubectl port-forward -n observability svc/dev-grafana 3000:80 >/dev/null 2>&1 &
@@ -580,10 +654,98 @@ lokiCanary:
   enabled: false
 ```
 
+# observability-stack-helm-values/otel-collector-minimal.yaml
+
+```yaml
+mode: deployment
+
+# Required: explicit image configuration
+image:
+  repository: otel/opentelemetry-collector-k8s
+  tag: 0.115.1
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 200m
+    memory: 256Mi
+
+# Enable ports for receiving telemetry
+ports:
+  otlp:
+    enabled: true
+    containerPort: 4317
+    servicePort: 4317
+    protocol: TCP
+  otlp-http:
+    enabled: true
+    containerPort: 4318
+    servicePort: 4318
+    protocol: TCP
+
+config:
+  receivers:
+    otlp:
+      protocols:
+        grpc:
+          endpoint: ${env:MY_POD_IP}:4317
+        http:
+          endpoint: ${env:MY_POD_IP}:4318
+  
+  processors:
+    batch:
+      timeout: 5s
+      send_batch_size: 512
+    
+    memory_limiter:
+      check_interval: 5s
+      limit_percentage: 80
+  
+  exporters:
+    # Export traces to Tempo
+    otlp/tempo:
+      endpoint: dev-tempo.observability.svc.cluster.local:4317
+      tls:
+        insecure: true
+    
+    # Keep debug exporter for troubleshooting
+    debug:
+      verbosity: detailed
+  
+  extensions:
+    health_check:
+      endpoint: ${env:MY_POD_IP}:13133
+  
+  service:
+    extensions: [health_check]
+    pipelines:
+      # Traces pipeline - export to both Tempo and debug
+      traces:
+        receivers: [otlp]
+        processors: [memory_limiter, batch]
+        exporters: [otlp/tempo, debug]
+      
+      # Logs pipeline - still just debug for now  
+      logs:
+        receivers: [otlp]
+        processors: [memory_limiter, batch]
+        exporters: [debug]
+
+# Service configuration
+service:
+  type: ClusterIP
+```
+
 # observability-stack-helm-values/otel-collector.yaml
 
 ```yaml
 mode: deployment
+
+image:
+  repository: otel/opentelemetry-collector-k8s
+  tag: 0.115.1
 
 resources:
   requests:
@@ -786,15 +948,16 @@ kubeStateMetrics:
 ```yaml
 tempo:
   repository: grafana/tempo
-  tag: 1.18.2
+  tag: 2.7.1
   
+   Minimal resources for low-memory environments
   resources:
     requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
       cpu: 100m
       memory: 256Mi
-    limits:
-      cpu: 200m
-      memory: 512Mi
   
   storage:
     trace:
@@ -803,6 +966,12 @@ tempo:
         path: /var/tempo/traces
       wal:
         path: /var/tempo/wal
+      # Reduce block size and cache
+      block:
+        encoding: zstd
+      pool:
+        max_workers: 10
+        queue_depth: 2000
   
   receivers:
     otlp:
@@ -812,13 +981,18 @@ tempo:
         http:
           endpoint: 0.0.0.0:4318
   
-  metricsGenerator:
-    enabled: true
-    remoteWriteUrl: http://dev-prometheus-kube-promet-prometheus.observability.svc.cluster.local:9090/api/v1/write
+  # Reduce memory usage
+  querier:
+    max_concurrent_queries: 5
+  
+  # Minimal ingester settings
+  ingester:
+    max_block_duration: 5m
+    max_block_bytes: 10485760  # 10MB
 
 persistence:
   enabled: true
-  size: 1Gi
+  size: 200Mi  # Reduced from 1Gi
   accessModes:
     - ReadWriteOnce
 
@@ -1030,6 +1204,219 @@ The application extracts `trace_id` from the W3C `traceparent` header:
 ## 📝 License
 
 This project is part of the OpenTelemetry observability stack demonstration.
+
+```
+
+# scripts/verify-otel-to-tempo.sh
+
+```sh
+#!/bin/bash
+
+echo "Verification: OTel Collection + Tempo Storage"
+echo "============================================="
+
+# Check if port-forwards are active
+check_port() {
+    local port=$1
+    local name=$2
+    if nc -z localhost $port 2>/dev/null; then
+        echo "✅ $name is accessible on port $port"
+        return 0
+    else
+        echo "❌ $name is NOT accessible on port $port"
+        echo "   Run: kubectl port-forward -n observability svc/$name $port:$port &"
+        return 1
+    fi
+}
+
+echo ""
+echo "1. Checking Port Forwards"
+echo "------------------------"
+check_port 3100 "dev-tempo"
+check_port 8080 "tracing-webapp-service"
+
+echo ""
+echo "2. Checking Pod Status"
+echo "---------------------"
+echo "OTel Collector:"
+kubectl get pods -n observability -l app.kubernetes.io/name=opentelemetry-collector
+echo ""
+echo "Tempo:"
+kubectl get pods -n observability -l app.kubernetes.io/name=tempo
+echo ""
+echo "Spring Boot App:"
+kubectl get pods -n my-demo -l app=tracing-webapp
+
+echo ""
+echo "3. Checking OTel Collector Logs"
+echo "-------------------------------"
+echo "Looking for trace exports to Tempo..."
+otel_logs=$(kubectl logs -n observability -l app.kubernetes.io/name=opentelemetry-collector --tail=100)
+
+if echo "$otel_logs" | grep -qi "tempo\|export"; then
+    echo "✅ OTel Collector has export activity"
+else
+    echo "⚠️  No export activity found in recent logs"
+fi
+
+if echo "$otel_logs" | grep -q "Span"; then
+    echo "✅ OTel Collector is receiving spans"
+    span_count=$(echo "$otel_logs" | grep -c "Span" || echo "0")
+    echo "   Found $span_count span references in recent logs"
+else
+    echo "⚠️  No spans found in recent OTel Collector logs"
+fi
+
+echo ""
+echo "4. Checking Spring Boot App Logs"
+echo "--------------------------------"
+echo "Looking for trace_id in application logs..."
+app_logs=$(kubectl logs -n my-demo -l app=tracing-webapp --tail=20)
+
+if echo "$app_logs" | grep -q "trace_id"; then
+    echo "✅ Spring Boot app is generating traces with trace_id"
+    echo "   Sample log:"
+    echo "$app_logs" | grep "trace_id" | head -1 | jq -r '.message + " (trace_id: " + .trace_id + ")"' 2>/dev/null || echo "$app_logs" | grep "trace_id" | head -1
+else
+    echo "⚠️  No trace_id found in recent app logs"
+fi
+
+echo ""
+echo "5. Waiting for CronJob Execution"
+echo "--------------------------------"
+echo "Checking for recent CronJob runs..."
+
+latest_job=$(kubectl get jobs -n my-demo -l app=request-sender --sort-by=.metadata.creationTimestamp -o jsonpath='{.items[-1].metadata.name}' 2>/dev/null)
+
+if [ -n "$latest_job" ]; then
+    echo "✅ Found CronJob execution: $latest_job"
+    
+    trace_id=$(kubectl logs -n my-demo job/$latest_job 2>/dev/null | grep "Trace ID:" | awk '{print $NF}' | tail -1)
+    
+    if [ -n "$trace_id" ]; then
+        echo "✅ Extracted trace_id: $trace_id"
+        
+        echo ""
+        echo "6. Querying Tempo for Trace"
+        echo "---------------------------"
+        echo "Waiting 5 seconds for trace to be written to Tempo..."
+        sleep 5
+        
+        tempo_response=$(curl -s "http://localhost:3100/api/traces/$trace_id")
+        
+        if [ -z "$tempo_response" ]; then
+            echo "❌ Empty response from Tempo"
+        elif echo "$tempo_response" | jq -e '.batches[0]' >/dev/null 2>&1; then
+            echo "✅ SUCCESS: Trace found in Tempo!"
+            
+            echo ""
+            echo "Trace Details:"
+            echo "  Trace ID: $trace_id"
+            
+            span_count=$(echo "$tempo_response" | jq '[.batches[].scopeSpans[].spans[]] | length')
+            echo "  Total Spans: $span_count"
+            
+            echo "  Services involved:"
+            echo "$tempo_response" | jq -r '.batches[].resource.attributes[]? | select(.key=="service.name") | .value.stringValue' | sed 's/^/    - /'
+            
+            echo ""
+            echo "Span breakdown:"
+            echo "$tempo_response" | jq -r '.batches[].scopeSpans[].spans[]? | "  - \(.name) (kind: \(.kind)) - status: \(.status.code // "unset")"'
+            
+            echo ""
+            parent_count=$(echo "$tempo_response" | jq '[.batches[].scopeSpans[].spans[] | select(.parentSpanId != null)] | length')
+            if [ -n "$parent_count" ] && [ "$parent_count" -gt 0 ]; then
+                echo "  ✅ Parent-child span relationship detected ($parent_count child span(s))"
+            else
+                echo "  ⚠️  No parent-child relationships found"
+            fi
+        else
+            echo "❌ Trace not found in Tempo"
+        fi
+        
+        echo ""
+        echo "7. Direct Tempo API Queries"
+        echo "--------------------------"
+        echo "Tempo health:"
+        curl -s http://localhost:3100/ready && echo "  ✅ Tempo is ready" || echo "  ❌ Tempo is not ready"
+        
+        echo ""
+        echo "Search for traces (last 1 hour):"
+        if date --version >/dev/null 2>&1; then
+            start_time=$(date -u -d '1 hour ago' +%s)
+            end_time=$(date -u +%s)
+        else
+            start_time=$(date -u -v-1H +%s)
+            end_time=$(date -u +%s)
+        fi
+        
+        search_response=$(curl -s "http://localhost:3100/api/search?tags=service.name=request-sender&start=${start_time}&end=${end_time}")
+        trace_count=$(echo "$search_response" | jq -r '.traces | length' 2>/dev/null || echo "0")
+        echo "  Found $trace_count trace(s) from request-sender service"
+        
+    else
+        echo "❌ Could not extract trace_id from CronJob logs"
+        kubectl logs -n my-demo job/$latest_job --tail=10
+    fi
+else
+    echo "⚠️  No CronJob executions found yet"
+    echo "   CronJob runs every minute. Wait and check again."
+fi
+
+echo ""
+echo "============================================="
+echo "Verification Summary"
+echo "============================================="
+echo ""
+echo "What we verified:"
+echo "  1. OTel Collector is receiving spans from applications"
+echo "  2. Traces are being stored in Tempo"
+echo "  3. Distributed tracing works (parent-child span relationships)"
+echo "  4. Both services (CronJob + Spring Boot) are participating in traces"
+echo ""
+echo "Complete trace flow:"
+echo "  CronJob (CLIENT span) → HTTP request → Spring Boot (SERVER span)"
+echo "  Both spans share the same trace_id, forming a distributed trace"
+echo ""
+echo "Manual verification commands:"
+echo "  Query trace: curl http://localhost:3100/api/traces/{trace_id} | jq"
+echo "  Search traces: curl 'http://localhost:3100/api/search?tags=service.name=request-sender' | jq"
+echo ""
+echo "============================================="
+```
+
+# skaffold.yaml
+
+```yaml
+apiVersion: skaffold/v2beta16
+kind: Config
+metadata:
+  name: tracing-app
+
+build:
+  local:
+    push: false
+    useBuildkit: true
+  artifacts:
+  - image: vjkancherla/tracing-app
+    docker:
+      dockerfile: Dockerfile
+
+deploy:
+  helm:
+    releases:
+    - name: tracing-app
+      chartPath: tracing-app-helm-chart
+      namespace: my-demo
+      createNamespace: true
+
+portForward:
+- resourceType: service
+  resourceName: tracing-webapp-service
+  namespace: my-demo
+  port: 8080
+  localPort: 8080
+
 
 ```
 
@@ -1326,12 +1713,12 @@ spec:
                 ENDPOINT="/simulate-error"
                 EXPECTED_CODE="500"
                 JOB_TYPE="error_simulation"
-                echo "🔴 ERROR SIMULATION (minute $CURRENT_MINUTE)"
+                echo "ERROR SIMULATION (minute $CURRENT_MINUTE)"
               else
                 ENDPOINT="/"
                 EXPECTED_CODE="200"
                 JOB_TYPE="success"
-                echo "✅ SUCCESS TEST (minute $CURRENT_MINUTE)"
+                echo "SUCCESS TEST (minute $CURRENT_MINUTE)"
               fi
               
               echo "Endpoint: ${ENDPOINT}"
@@ -1356,21 +1743,21 @@ spec:
                   SPAN_STATUS_CODE=2  # ERROR
                   SPAN_STATUS_MESSAGE="Expected error simulation completed"
                   JOB_STATUS="failed"
-                  echo "✅ Expected failure occurred"
+                  echo "Expected failure occurred"
                 else
                   SPAN_STATUS_CODE=1  # OK
                   SPAN_STATUS_MESSAGE="Success"
                   JOB_STATUS="success"
-                  echo "✅ Request succeeded"
+                  echo "Request succeeded"
                 fi
               else
                 SPAN_STATUS_CODE=2  # ERROR
                 SPAN_STATUS_MESSAGE="Unexpected response code: ${RESPONSE_CODE}"
                 JOB_STATUS="failed"
-                echo "❌ Unexpected response!"
+                echo "Unexpected response!"
               fi
               
-              # Create OTLP span payload
+              # Create OTLP span payload - this should be the PARENT span
               cat > /tmp/span.json <<EOF
               {
                 "resourceSpans": [{
@@ -1387,7 +1774,7 @@ spec:
                     "spans": [{
                       "traceId": "${TRACE_ID}",
                       "spanId": "${SPAN_ID}",
-                      "name": "cronjob_execution",
+                      "name": "http_request",
                       "kind": 3,
                       "startTimeUnixNano": "${START_TIME_NS}",
                       "endTimeUnixNano": "${END_TIME_NS}",
@@ -1397,7 +1784,8 @@ spec:
                         {"key": "http.status_code", "value": {"intValue": ${RESPONSE_CODE}}},
                         {"key": "job.type", "value": {"stringValue": "${JOB_TYPE}"}},
                         {"key": "job.status", "value": {"stringValue": "${JOB_STATUS}"}},
-                        {"key": "job.expected_code", "value": {"intValue": ${EXPECTED_CODE}}}
+                        {"key": "job.expected_code", "value": {"intValue": ${EXPECTED_CODE}}},
+                        {"key": "component", "value": {"stringValue": "cronjob"}}
                       ],
                       "status": {
                         "code": ${SPAN_STATUS_CODE},
@@ -1418,9 +1806,9 @@ spec:
                 -s -o /dev/null -w "%{http_code}")
               
               if [ "$HTTP_STATUS" = "200" ] || [ "$HTTP_STATUS" = "202" ]; then
-                echo "✅ Span sent successfully (HTTP ${HTTP_STATUS})"
+                echo "Span sent successfully (HTTP ${HTTP_STATUS})"
               else
-                echo "⚠️  Failed to send span (HTTP ${HTTP_STATUS})"
+                echo "Failed to send span (HTTP ${HTTP_STATUS})"
               fi
               
               echo ""
@@ -1473,6 +1861,8 @@ spec:
           value: {{ .Values.webapp.name | quote }}
         - name: OTEL_EXPORTER_OTLP_ENDPOINT
           value: {{ .Values.otel.collector.grpcEndpoint | quote }}
+        - name: OTEL_EXPORTER_OTLP_PROTOCOL
+          value: {{ .Values.otel.exporter.protocol | default "http/protobuf" | quote }}
         - name: OTEL_TRACES_EXPORTER
           value: {{ .Values.otel.exporter.tracesExporter | quote }}
         - name: OTEL_METRICS_EXPORTER
@@ -1487,15 +1877,15 @@ spec:
           httpGet:
             path: /health
             port: 8080
-          initialDelaySeconds: 30
-          periodSeconds: 10
+          initialDelaySeconds: {{ .Values.webapp.livenessProbe.initialDelaySeconds | default 30 }}
+          periodSeconds: {{ .Values.webapp.livenessProbe.periodSeconds | default 10 }}
         
         readinessProbe:
           httpGet:
             path: /health
             port: 8080
-          initialDelaySeconds: 10
-          periodSeconds: 5
+          initialDelaySeconds: {{ .Values.webapp.readinessProbe.initialDelaySeconds | default 10 }}
+          periodSeconds: {{ .Values.webapp.readinessProbe.periodSeconds | default 5 }}
 ```
 
 # tracing-app-helm-chart/templates/service.yaml
@@ -1522,28 +1912,34 @@ spec:
 # OpenTelemetry Configuration (shared)
 otel:
   collector:
-    # gRPC endpoint (for Java agent)
-    grpcEndpoint: "http://otel-collector.observability.svc.cluster.local:4317"
+    # HTTP endpoint (for Java agent - use HTTP protocol on port 4318)
+    grpcEndpoint: "http://otel-collector-opentelemetry-collector.observability.svc.cluster.local:4318"
     # HTTP endpoint (for CronJob manual instrumentation)
-    httpEndpoint: "http://otel-collector.observability.svc.cluster.local:4318"
+    httpEndpoint: "http://otel-collector-opentelemetry-collector.observability.svc.cluster.local:4318"
   
   exporter:
     # Default: send to OTel Collector
     tracesExporter: "otlp"
     metricsExporter: "otlp"
     logsExporter: "otlp"
-    # For testing: override to log to console
-    # tracesExporter: "logging"
-    # metricsExporter: "logging"
-    # logsExporter: "logging"
+    # Explicitly set protocol to HTTP
+    protocol: "http/protobuf"
 
 # Spring Boot Webapp
 webapp:
   name: tracing-webapp
   replicas: 1
   image:
-    repository: tracing-app
+    repository: vjkancherla/tracing-app  # Keep using your image
     tag: "1.0.0"
+  
+  # Add health probe configuration
+  livenessProbe:
+    initialDelaySeconds: 60
+    periodSeconds: 10
+  readinessProbe:
+    initialDelaySeconds: 30
+    periodSeconds: 5
   
   resources:
     limits:

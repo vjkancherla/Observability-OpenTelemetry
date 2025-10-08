@@ -1,16 +1,22 @@
+replicas: 1
+
 tempo:
   repository: grafana/tempo
   tag: 2.7.1
   
-   Minimal resources for low-memory environments
+  # Minimal resources for low-memory environments
   resources:
     requests:
       cpu: 50m
-      memory: 128Mi
+      memory: 256Mi
     limits:
       cpu: 100m
-      memory: 256Mi
+      memory: 512Mi
   
+  # Reduce memory ballast
+  memBallastSizeMbs: 512
+  
+  # Storage configuration
   storage:
     trace:
       backend: local
@@ -18,29 +24,19 @@ tempo:
         path: /var/tempo/traces
       wal:
         path: /var/tempo/wal
-      # Reduce block size and cache
-      block:
-        encoding: zstd
-      pool:
-        max_workers: 10
-        queue_depth: 2000
   
+  # OTLP receivers
   receivers:
     otlp:
       protocols:
         grpc:
-          endpoint: 0.0.0.0:4317
+          endpoint: "0.0.0.0:4317"
         http:
-          endpoint: 0.0.0.0:4318
-  
-  # Reduce memory usage
-  querier:
-    max_concurrent_queries: 5
-  
-  # Minimal ingester settings
-  ingester:
-    max_block_duration: 5m
-    max_block_bytes: 10485760  # 10MB
+          endpoint: "0.0.0.0:4318"
+
+# Disable tempo-query to save resources
+tempoQuery:
+  enabled: false
 
 persistence:
   enabled: true
