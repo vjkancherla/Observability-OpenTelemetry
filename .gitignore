@@ -1,3 +1,7 @@
+.aidigestminify
+.skaffoldignore
+codebase.md
+
 # Maven
 target/
 pom.xml.tag
